@@ -35,7 +35,7 @@ pipeline {
           // normalize parameter into list
           def targets = params.TARGETS.split(',').collect { it.trim() }
           // Use Jenkins SSH credential and scp/ssh inside ssh-agent
-          sshagent([env.SSH_CREDENTIALS_ID]) {
+          /*sshagent([env.SSH_CREDENTIALS_ID]) {
             // Create a tar of repo contents (or pick the directory you need)
             sh 'tar -czf site_package.tar.gz -C . $(git ls-files) || tar -czf site_package.tar.gz .'
 
@@ -72,7 +72,50 @@ NGINX'
               EOF
               """
             }
-          } // sshagent
+          }*/ // sshagent
+// inside your script block, replacing sshagent([...]) { ... }
+// Under this line is the new code
+withCredentials([sshUserPrivateKey(credentialsId: env.SSH_CREDENTIALS_ID,
+                                   keyFileVariable: 'SSH_KEYFILE',
+                                   usernameVariable: 'SSH_USER_VAR')]) {
+
+  // create artifact
+  sh 'tar -czf site_package.tar.gz -C . $(git ls-files) || tar -czf site_package.tar.gz .'
+
+  for (t in targets) {
+    echo "Deploying to ${t}..."
+    // Use the keyfile path created by withCredentials
+    sh "scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${SSH_KEYFILE} site_package.tar.gz ${SSH_USER}@${t}:/tmp/site_package.tar.gz"
+    sh """ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -i ${SSH_KEYFILE} ${SSH_USER}@${t} << 'EOF'
+      set -e
+      mkdir -p /var/www/kelownatrails
+      tar -xzf /tmp/site_package.tar.gz -C /var/www/kelownatrails
+      if ! command -v nginx >/dev/null 2>&1; then
+        sudo yum update -y || true
+        sudo yum install -y nginx || (sudo apt-get update -y && sudo apt-get install -y nginx)
+      fi
+      sudo systemctl enable nginx || true
+      sudo systemctl start nginx
+      sudo bash -c 'cat > /etc/nginx/conf.d/kelownatrails.conf <<NGINX
+server {
+  listen 80;
+  server_name _;
+  root /var/www/kelownatrails;
+  index index.html;
+  location / {
+    try_files \$uri \$uri/ =404;
+  }
+}
+NGINX'
+      sudo nginx -s reload || sudo systemctl restart nginx
+      echo "Deployed to ${t}"
+    EOF
+    """
+  }
+}
+// Above is the new code
+
+
         }
       }
     }
